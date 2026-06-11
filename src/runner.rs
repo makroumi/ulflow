@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use ulmcp::registry::Registry;
+use crate::llm::LLM;
 
 use crate::context::{ContextValue, ExecutionContext};
 use crate::error::{FlowError, StepError};
@@ -17,6 +18,7 @@ pub struct FlowRunner {
     registry: Registry,
     telemetry: Telemetry,
     event_bus: EventBus,
+    llm: Option<LLM>,
 }
 
 impl FlowRunner {
@@ -25,7 +27,14 @@ impl FlowRunner {
             registry,
             telemetry: Telemetry::new(),
             event_bus: EventBus::new(),
+            llm: None,
         }
+    }
+
+    /// Set the LLM for agent steps.
+    pub fn with_llm(mut self, llm: LLM) -> Self {
+        self.llm = Some(llm);
+        self
     }
 
     pub fn on_event<F: Fn(&FlowEvent) + Send + Sync + 'static>(&mut self, handler: F) {
@@ -260,11 +269,19 @@ impl FlowRunner {
                 context_inputs: _,
                 output_field: _,
             } => {
-                // Render prompt with context
                 let rendered = ctx.render(prompt);
-                // In real usage, this calls the LLM API.
-                // Here we return the rendered prompt as output (LLM integration is pluggable).
-                Ok((Some(ContextValue::String(rendered)), 0))
+                // If LLM is configured, call it. Otherwise return rendered prompt.
+                if let Some(ref llm) = self.llm {
+                    match llm.ask(&rendered) {
+                        Ok(response) => {
+                            let tokens = response.input_tokens + response.output_tokens;
+                            Ok((Some(ContextValue::String(response.content)), tokens))
+                        }
+                        Err(e) => Err(format!("LLM error: {}", e)),
+                    }
+                } else {
+                    Ok((Some(ContextValue::String(rendered)), 0))
+                }
             }
             StepKind::Condition { test, .. } => {
                 let val = ctx.get(test).cloned().unwrap_or(ContextValue::Null);
@@ -386,6 +403,7 @@ mod tests {
     use crate::step::{Input, Step};
     use crate::workflow::{Flow, FlowInput};
     use ulmcp::registry::Registry;
+use crate::llm::LLM;
     use ulmcp::tool::*;
 
     fn test_registry() -> Registry {
