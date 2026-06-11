@@ -1,0 +1,27 @@
+[package]
+name        = "ulflow"
+version     = "0.1.0"
+edition     = "2021"
+authors     = ["El Mehdi Makroumi"]
+description = "ulflow: The agentic AI orchestration engine. Native Rust. Vertically integrated."
+license     = "BUSL-1.1"
+
+[lib]
+name       = "ulflow"
+path       = "src/lib.rs"
+crate-type = ["lib"]
+
+[dependencies]
+ulmen-core = { path = "../lumen/ulmen-core" }
+ulmcp      = { path = "../ulmcp" }
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto           = true
+codegen-units = 1
+opt-level     = 3
+strip         = true
