@@ -28,6 +28,7 @@ pub mod checkpoint;
 pub mod context;
 pub mod error;
 pub mod event;
+pub mod json_flow;
 pub mod llm;
 pub mod memory;
 pub mod runner;
@@ -41,6 +42,7 @@ pub mod prelude {
     pub use crate::context::{ContextBudget, ExecutionContext};
     pub use crate::error::{FlowError, StepError};
     pub use crate::event::{EventKind, FlowEvent};
+    pub use crate::json_flow::flow_from_json;
     pub use crate::llm::{ChatRequest, ChatResponse, Message, Role, LLM};
     pub use crate::memory::{Memory, MemoryScope};
     pub use crate::runner::FlowRunner;

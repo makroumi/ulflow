@@ -101,6 +101,135 @@ pub fn call_openai(
     })
 }
 
+/// Stream a chat request from OpenAI-compatible API.
+/// Calls the callback with each content chunk as it arrives.
+/// Works with: OpenAI, Groq, Together, Fireworks, etc.
+pub fn stream_openai<F: FnMut(&str)>(
+    config: &ProviderConfig,
+    request: &ChatRequest,
+    mut on_chunk: F,
+) -> Result<ChatResponse, LLMError> {
+    let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
+
+    let mut messages_json: Vec<serde_json::Value> = Vec::new();
+    if let Some(ref sys) = request.system {
+        messages_json.push(serde_json::json!({"role": "system", "content": sys}));
+    }
+    for msg in &request.messages {
+        messages_json
+            .push(serde_json::json!({"role": msg.role.to_string(), "content": msg.content}));
+    }
+
+    let mut body = serde_json::json!({
+        "model": request.model,
+        "messages": messages_json,
+        "stream": true,
+    });
+    if let Some(t) = request.temperature {
+        body["temperature"] = serde_json::json!(t);
+    }
+    if let Some(mt) = request.max_tokens {
+        body["max_tokens"] = serde_json::json!(mt);
+    }
+
+    let mut req = ureq::post(&url).set("Content-Type", "application/json");
+    if let Some(ref key) = config.api_key {
+        req = req.set("Authorization", &format!("Bearer {}", key));
+    }
+    for (k, v) in &config.headers {
+        req = req.set(k, v);
+    }
+
+    let resp = req.send_json(&body).map_err(|e| LLMError {
+        message: e.to_string(),
+        status_code: None,
+        provider: config.name.clone(),
+    })?;
+
+    let status = resp.status();
+    if status != 200 {
+        let body_str = resp.into_string().unwrap_or_default();
+        return Err(LLMError {
+            message: body_str,
+            status_code: Some(status),
+            provider: config.name.clone(),
+        });
+    }
+
+    // Read SSE stream line by line
+    let reader = resp.into_reader();
+    let buf_reader = std::io::BufReader::new(reader);
+    use std::io::BufRead;
+
+    let mut full_content = String::new();
+    let mut total_input = 0usize;
+    let mut total_output = 0usize;
+    let mut finish = FinishReason::Stop;
+
+    for line in buf_reader.lines() {
+        let line = line.map_err(|e| LLMError {
+            message: format!("stream read: {}", e),
+            status_code: None,
+            provider: config.name.clone(),
+        })?;
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed == "data: [DONE]" {
+            continue;
+        }
+        if !trimmed.starts_with("data: ") {
+            continue;
+        }
+
+        let json_str = &trimmed[6..];
+        if let Ok(chunk) = serde_json::from_str::<serde_json::Value>(json_str) {
+            // Extract content delta
+            if let Some(delta) = chunk["choices"][0]["delta"]["content"].as_str() {
+                if !delta.is_empty() {
+                    on_chunk(delta);
+                    full_content.push_str(delta);
+                }
+            }
+            // Check finish reason
+            if let Some(fr) = chunk["choices"][0]["finish_reason"].as_str() {
+                finish = match fr {
+                    "stop" => FinishReason::Stop,
+                    "length" => FinishReason::MaxTokens,
+                    _ => FinishReason::Stop,
+                };
+            }
+            // Extract usage if present (final chunk)
+            if let Some(usage) = chunk.get("usage") {
+                total_input = usage["prompt_tokens"].as_u64().unwrap_or(0) as usize;
+                total_output = usage["completion_tokens"].as_u64().unwrap_or(0) as usize;
+            }
+            // x-groq usage in the header or chunk
+            if let Some(usage) = chunk.get("x_groq") {
+                if let Some(u) = usage.get("usage") {
+                    total_input =
+                        u["prompt_tokens"].as_u64().unwrap_or(total_input as u64) as usize;
+                    total_output = u["completion_tokens"]
+                        .as_u64()
+                        .unwrap_or(total_output as u64) as usize;
+                }
+            }
+        }
+    }
+
+    // Estimate tokens if not provided
+    if total_output == 0 {
+        total_output = full_content.len() / 4;
+    }
+
+    Ok(ChatResponse {
+        content: full_content,
+        model: request.model.clone(),
+        input_tokens: total_input,
+        output_tokens: total_output,
+        finish_reason: finish,
+    })
+}
+
 /// Send a chat request to Anthropic API.
 pub fn call_anthropic(
     config: &ProviderConfig,

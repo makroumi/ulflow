@@ -213,6 +213,37 @@ impl LLM {
         }
     }
 
+    /// Stream a chat request. Calls on_chunk with each token as it arrives.
+    pub fn chat_stream<F: FnMut(&str)>(
+        &self,
+        request: &ChatRequest,
+        on_chunk: F,
+    ) -> Result<ChatResponse, LLMError> {
+        match self.provider_type {
+            ProviderType::OpenAI => provider::stream_openai(&self.config, request, on_chunk),
+            // Anthropic streaming uses different format, fall back to non-streaming
+            ProviderType::Anthropic => self.chat(request),
+            // Ollama streaming uses different format, fall back to non-streaming
+            ProviderType::Ollama => self.chat(request),
+        }
+    }
+
+    /// Stream a simple prompt. Calls on_chunk with each token.
+    pub fn ask_stream<F: FnMut(&str)>(
+        &self,
+        prompt: &str,
+        on_chunk: F,
+    ) -> Result<ChatResponse, LLMError> {
+        let request = ChatRequest::new(
+            &self.config.default_model,
+            vec![Message {
+                role: Role::User,
+                content: prompt.to_string(),
+            }],
+        );
+        self.chat_stream(&request, on_chunk)
+    }
+
     /// Simple one-shot: send a user message, get a response.
     pub fn ask(&self, prompt: &str) -> Result<ChatResponse, LLMError> {
         let request = ChatRequest::new(
