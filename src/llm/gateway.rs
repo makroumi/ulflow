@@ -17,6 +17,7 @@ enum ProviderType {
     OpenAI,
     Anthropic,
     Ollama,
+    Mock,
 }
 
 impl LLM {
@@ -168,6 +169,30 @@ impl LLM {
         }
     }
 
+    /// Mock LLM for testing. Returns deterministic responses without HTTP calls.
+    /// No API key needed. Responses echo the prompt or return a fixed string.
+    pub fn mock(response: impl Into<String>) -> Self {
+        let resp = response.into();
+        Self {
+            config: ProviderConfig {
+                name: "mock".into(),
+                base_url: String::new(),
+                api_key: None,
+                default_model: format!(
+                    "mock:{}",
+                    if resp.len() > 20 { &resp[..20] } else { &resp }
+                ),
+                headers: Vec::new(),
+            },
+            provider_type: ProviderType::Mock,
+        }
+    }
+
+    /// Mock LLM that echoes the prompt back.
+    pub fn echo() -> Self {
+        Self::mock("[echo]")
+    }
+
     // ---------------------------------------------------------------
     // Configuration
     // ---------------------------------------------------------------
@@ -210,6 +235,31 @@ impl LLM {
             ProviderType::OpenAI => provider::call_openai(&self.config, request),
             ProviderType::Anthropic => provider::call_anthropic(&self.config, request),
             ProviderType::Ollama => provider::call_ollama(&self.config, request),
+            ProviderType::Mock => {
+                let prompt = request
+                    .messages
+                    .last()
+                    .map(|m| m.content.as_str())
+                    .unwrap_or("");
+                let response = if self.config.default_model.starts_with("mock:[echo]") {
+                    format!("[mock] {}", prompt)
+                } else {
+                    self.config
+                        .default_model
+                        .strip_prefix("mock:")
+                        .unwrap_or("mock response")
+                        .to_string()
+                };
+                let tokens = ulmen_core::tokens::count_tokens(prompt);
+                let out_tokens = ulmen_core::tokens::count_tokens(&response);
+                Ok(ChatResponse {
+                    content: response,
+                    model: "mock".into(),
+                    input_tokens: tokens,
+                    output_tokens: out_tokens,
+                    finish_reason: FinishReason::Stop,
+                })
+            }
         }
     }
 
@@ -225,6 +275,7 @@ impl LLM {
             ProviderType::Anthropic => self.chat(request),
             // Ollama streaming uses different format, fall back to non-streaming
             ProviderType::Ollama => self.chat(request),
+            ProviderType::Mock => self.chat(request),
         }
     }
 
@@ -337,6 +388,32 @@ mod tests {
         let _i = LLM::mistral("mistral-large-latest");
         let _j = LLM::custom("https://my-api.com/v1", "my-model");
         // All have identical interface
+    }
+
+    #[test]
+    fn mock_returns_fixed() {
+        let llm = LLM::mock("test response 42");
+        let resp = llm.ask("anything").unwrap();
+        assert_eq!(resp.content, "test response 42");
+        assert_eq!(resp.model, "mock");
+        assert!(resp.input_tokens > 0);
+    }
+
+    #[test]
+    fn echo_returns_prompt() {
+        let llm = LLM::echo();
+        let resp = llm.ask("hello world").unwrap();
+        assert!(resp.content.contains("hello world"));
+    }
+
+    #[test]
+    fn mock_no_http() {
+        // Mock should work without any network
+        let llm = LLM::mock("works offline");
+        for _ in 0..100 {
+            let resp = llm.ask("test").unwrap();
+            assert_eq!(resp.content, "works offline");
+        }
     }
 
     #[test]
