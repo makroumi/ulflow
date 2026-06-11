@@ -3,8 +3,8 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use ulmcp::registry::Registry;
 use crate::llm::LLM;
+use ulmcp::registry::Registry;
 
 use crate::context::{ContextValue, ExecutionContext};
 use crate::error::{FlowError, StepError};
@@ -403,7 +403,6 @@ mod tests {
     use crate::step::{Input, Step};
     use crate::workflow::{Flow, FlowInput};
     use ulmcp::registry::Registry;
-use crate::llm::LLM;
     use ulmcp::tool::*;
 
     fn test_registry() -> Registry {

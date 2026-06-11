@@ -70,6 +70,90 @@ impl LLM {
         }
     }
 
+    /// Groq (fast inference: llama-3.3-70b, mixtral, gemma2).
+    pub fn groq(model: impl Into<String>) -> Self {
+        Self {
+            config: ProviderConfig {
+                name: "groq".into(),
+                base_url: "https://api.groq.com/openai/v1".into(),
+                api_key: std::env::var("GROQ_API_KEY").ok(),
+                default_model: model.into(),
+                headers: Vec::new(),
+            },
+            provider_type: ProviderType::OpenAI,
+        }
+    }
+
+    /// Google Gemini (gemini-1.5-pro, gemini-2.0-flash, etc).
+    pub fn gemini(model: impl Into<String>) -> Self {
+        Self {
+            config: ProviderConfig {
+                name: "gemini".into(),
+                base_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
+                api_key: std::env::var("GEMINI_API_KEY").ok(),
+                default_model: model.into(),
+                headers: Vec::new(),
+            },
+            provider_type: ProviderType::OpenAI,
+        }
+    }
+
+    /// Together AI (llama, mistral, qwen and more).
+    pub fn together(model: impl Into<String>) -> Self {
+        Self {
+            config: ProviderConfig {
+                name: "together".into(),
+                base_url: "https://api.together.xyz/v1".into(),
+                api_key: std::env::var("TOGETHER_API_KEY").ok(),
+                default_model: model.into(),
+                headers: Vec::new(),
+            },
+            provider_type: ProviderType::OpenAI,
+        }
+    }
+
+    /// Fireworks AI (fast open-source models).
+    pub fn fireworks(model: impl Into<String>) -> Self {
+        Self {
+            config: ProviderConfig {
+                name: "fireworks".into(),
+                base_url: "https://api.fireworks.ai/inference/v1".into(),
+                api_key: std::env::var("FIREWORKS_API_KEY").ok(),
+                default_model: model.into(),
+                headers: Vec::new(),
+            },
+            provider_type: ProviderType::OpenAI,
+        }
+    }
+
+    /// Perplexity (sonar models with web search).
+    pub fn perplexity(model: impl Into<String>) -> Self {
+        Self {
+            config: ProviderConfig {
+                name: "perplexity".into(),
+                base_url: "https://api.perplexity.ai".into(),
+                api_key: std::env::var("PERPLEXITY_API_KEY").ok(),
+                default_model: model.into(),
+                headers: Vec::new(),
+            },
+            provider_type: ProviderType::OpenAI,
+        }
+    }
+
+    /// Mistral AI (mistral-large, codestral, etc).
+    pub fn mistral(model: impl Into<String>) -> Self {
+        Self {
+            config: ProviderConfig {
+                name: "mistral".into(),
+                base_url: "https://api.mistral.ai/v1".into(),
+                api_key: std::env::var("MISTRAL_API_KEY").ok(),
+                default_model: model.into(),
+                headers: Vec::new(),
+            },
+            provider_type: ProviderType::OpenAI,
+        }
+    }
+
     /// Any OpenAI-compatible API with custom base URL.
     pub fn custom(base_url: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
@@ -197,11 +281,39 @@ mod tests {
     }
 
     #[test]
+    fn groq_constructor() {
+        let llm = LLM::groq("llama-3.3-70b-versatile");
+        assert_eq!(llm.provider(), "groq");
+        assert_eq!(llm.model(), "llama-3.3-70b-versatile");
+    }
+
+    #[test]
+    fn gemini_constructor() {
+        let llm = LLM::gemini("gemini-1.5-pro");
+        assert_eq!(llm.provider(), "gemini");
+    }
+
+    #[test]
+    fn all_providers_compile() {
+        let _a = LLM::openai("gpt-4o");
+        let _b = LLM::anthropic("claude-3-5-sonnet-20241022");
+        let _c = LLM::ollama("llama3");
+        let _d = LLM::groq("llama-3.3-70b-versatile");
+        let _e = LLM::gemini("gemini-1.5-pro");
+        let _f = LLM::together("meta-llama/Llama-3-70b-chat-hf");
+        let _g = LLM::fireworks("accounts/fireworks/models/llama-v3-70b");
+        let _h = LLM::perplexity("sonar-pro");
+        let _i = LLM::mistral("mistral-large-latest");
+        let _j = LLM::custom("https://my-api.com/v1", "my-model");
+        // All have identical interface
+    }
+
+    #[test]
     fn model_switch() {
-        // Prove that switching is one line:
         let _llm1 = LLM::openai("gpt-4o");
         let _llm2 = LLM::anthropic("claude-3-5-sonnet-20241022");
         let _llm3 = LLM::ollama("llama3");
-        // All have the same interface: .chat(), .ask(), .complete()
+        let _llm4 = LLM::groq("llama-3.3-70b-versatile");
+        let _llm5 = LLM::gemini("gemini-2.0-flash");
     }
 }

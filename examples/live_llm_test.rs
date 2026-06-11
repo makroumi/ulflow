@@ -4,14 +4,14 @@
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use ulmen_core::*;
-use ulmcp::tool::*;
-use ulmcp::registry::Registry;
-use ulflow::prelude::*;
-use ulflow::step::Input;
+use uldb::engine::{Engine, EngineConfig};
 use ulflow::context::ContextValue;
 use ulflow::llm::LLM;
-use uldb::engine::{Engine, EngineConfig};
+use ulflow::prelude::*;
+use ulflow::step::Input;
+use ulmcp::registry::Registry;
+use ulmcp::tool::*;
+use ulmen_core::*;
 
 const SEP: &str = "======================================================================";
 
@@ -22,22 +22,31 @@ fn main() {
 
     // Check API key
     let api_key = std::env::var("GROQ_API_KEY").expect("Set GROQ_API_KEY");
-    println!("  API key: {}...{}", &api_key[..8], &api_key[api_key.len()-4..]);
+    println!(
+        "  API key: {}...{}",
+        &api_key[..8],
+        &api_key[api_key.len() - 4..]
+    );
 
     let mut pass = 0u32;
     let mut fail = 0u32;
     macro_rules! check {
         ($name:expr, $cond:expr) => {
-            if $cond { pass += 1; println!("  [PASS] {}", $name); }
-            else     { fail += 1; println!("  [FAIL] {}", $name); }
+            if $cond {
+                pass += 1;
+                println!("  [PASS] {}", $name);
+            } else {
+                fail += 1;
+                println!("  [FAIL] {}", $name);
+            }
         };
     }
 
     // === 1. Direct LLM call ===
     println!("\n--- 1. Direct LLM Call ---");
 
-    let llm = LLM::custom("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile")
-        .api_key(&api_key);
+    let llm =
+        LLM::custom("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile").api_key(&api_key);
 
     println!("  Provider: {}", llm.provider());
     println!("  Model:    {}", llm.model());
@@ -59,20 +68,28 @@ fn main() {
     println!("\n--- 2. System Prompt ---");
 
     let start = Instant::now();
-    let response = llm.ask_with_system(
-        "You are a senior Rust developer. Be concise. No markdown.",
-        "What is the difference between Arc and Rc in Rust? One sentence."
-    ).unwrap();
+    let response = llm
+        .ask_with_system(
+            "You are a senior Rust developer. Be concise. No markdown.",
+            "What is the difference between Arc and Rc in Rust? One sentence.",
+        )
+        .unwrap();
     let latency = start.elapsed().as_millis();
 
     check!("system prompt works", !response.content.is_empty());
-    check!("mentions thread", response.content.to_lowercase().contains("thread")
-        || response.content.to_lowercase().contains("concurrent")
-        || response.content.to_lowercase().contains("arc"));
+    check!(
+        "mentions thread",
+        response.content.to_lowercase().contains("thread")
+            || response.content.to_lowercase().contains("concurrent")
+            || response.content.to_lowercase().contains("arc")
+    );
     println!("  Response: {}", response.content.trim());
-    println!("  Tokens:   {} in + {} out = {} total",
-        response.input_tokens, response.output_tokens,
-        response.input_tokens + response.output_tokens);
+    println!(
+        "  Tokens:   {} in + {} out = {} total",
+        response.input_tokens,
+        response.output_tokens,
+        response.input_tokens + response.output_tokens
+    );
     println!("  Latency:  {} ms", latency);
 
     // === 3. Multi-turn conversation ===
@@ -81,9 +98,18 @@ fn main() {
     use ulflow::llm::{Message, Role};
 
     let messages = vec![
-        Message { role: Role::User, content: "Remember this number: 42".into() },
-        Message { role: Role::Assistant, content: "Got it, I'll remember 42.".into() },
-        Message { role: Role::User, content: "What number did I ask you to remember? Just the number.".into() },
+        Message {
+            role: Role::User,
+            content: "Remember this number: 42".into(),
+        },
+        Message {
+            role: Role::Assistant,
+            content: "Got it, I'll remember 42.".into(),
+        },
+        Message {
+            role: Role::User,
+            content: "What number did I ask you to remember? Just the number.".into(),
+        },
     ];
 
     let start = Instant::now();
@@ -100,7 +126,9 @@ fn main() {
 
     let db_dir = std::env::temp_dir().join(format!("llm_test_{}", std::process::id()));
     std::fs::create_dir_all(&db_dir).unwrap();
-    let engine = Arc::new(RwLock::new(Engine::open(EngineConfig::new(&db_dir)).unwrap()));
+    let engine = Arc::new(RwLock::new(
+        Engine::open(EngineConfig::new(&db_dir)).unwrap(),
+    ));
 
     // Ingest code
     {
@@ -117,19 +145,33 @@ fn main() {
     registry.register_tool(
         ToolDef::new("code_search", "Search code").param("query", "Q", ParamType::String, true),
         Box::new(move |call| {
-            let q = call.arguments.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let q = call
+                .arguments
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let mut eng = eng_s.write().unwrap();
             let hits = eng.indices.query(&uldb::query::planner::QuerySpec {
-                text: q.to_string(), top_k: 3, ..Default::default() });
-            let results: Vec<String> = hits.iter()
+                text: q.to_string(),
+                top_k: 3,
+                ..Default::default()
+            });
+            let results: Vec<String> = hits
+                .iter()
                 .map(|h| {
                     let key = String::from_utf8_lossy(&h.key).to_string();
                     let val = eng.get(&h.key).unwrap_or_default();
                     format!("{}:\n{}", key, String::from_utf8_lossy(&val))
-                }).collect();
-            ToolResult { call_id: call.call_id.clone(), status: ToolStatus::Success,
+                })
+                .collect();
+            ToolResult {
+                call_id: call.call_id.clone(),
+                status: ToolStatus::Success,
                 output: ToolValue::String(results.join("\n\n")),
-                error: None, tokens_used: Some(results.len() * 50), latency_ms: None }
+                error: None,
+                tokens_used: Some(results.len() * 50),
+                latency_ms: None,
+            }
         }),
     );
 
@@ -145,13 +187,18 @@ fn main() {
 
     let start = Instant::now();
     let mut runner = FlowRunner::new(registry).with_llm(
-        LLM::custom("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile")
-            .api_key(&api_key)
+        LLM::custom("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile").api_key(&api_key),
     );
 
-    let result = runner.run(flow, FlowInput::new()
-        .var("question", "Is there a performance issue in the JWT validation code?")
-    ).unwrap();
+    let result = runner
+        .run(
+            flow,
+            FlowInput::new().var(
+                "question",
+                "Is there a performance issue in the JWT validation code?",
+            ),
+        )
+        .unwrap();
     let total_latency = start.elapsed().as_millis();
 
     check!("workflow succeeded", result.succeeded());
@@ -159,11 +206,14 @@ fn main() {
 
     if let Some(ContextValue::String(analysis)) = result.get("analyze.output") {
         check!("LLM analyzed code", !analysis.is_empty());
-        check!("found the issue", analysis.to_lowercase().contains("key")
-            || analysis.to_lowercase().contains("load")
-            || analysis.to_lowercase().contains("disk")
-            || analysis.to_lowercase().contains("performance")
-            || analysis.to_lowercase().contains("cache"));
+        check!(
+            "found the issue",
+            analysis.to_lowercase().contains("key")
+                || analysis.to_lowercase().contains("load")
+                || analysis.to_lowercase().contains("disk")
+                || analysis.to_lowercase().contains("performance")
+                || analysis.to_lowercase().contains("cache")
+        );
         println!("\n  LLM Analysis:");
         for line in analysis.trim().lines() {
             println!("    {}", line);
@@ -175,40 +225,79 @@ fn main() {
     // === 5. Serialize agent conversation ===
     println!("\n--- 5. Persist Agent Conversation ---");
 
-    let search_output: String = result.get("search.output")
-        .and_then(|v| if let ContextValue::String(s) = v { Some(s.clone()) } else { None })
+    let search_output: String = result
+        .get("search.output")
+        .and_then(|v| {
+            if let ContextValue::String(s) = v {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
         .unwrap_or_default();
-    let analysis_output: String = result.get("analyze.output")
-        .and_then(|v| if let ContextValue::String(s) = v { Some(s.clone()) } else { None })
+    let analysis_output: String = result
+        .get("analyze.output")
+        .and_then(|v| {
+            if let ContextValue::String(s) = v {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
         .unwrap_or_default();
 
     let agent_records = vec![
         AgentRecord {
-            record_type: RecordType::Msg, id: "m1".into(), thread_id: "review_001".into(), step: 1,
-            fields: vec![FieldValue::Str("user".into()), FieldValue::Int(1),
+            record_type: RecordType::Msg,
+            id: "m1".into(),
+            thread_id: "review_001".into(),
+            step: 1,
+            fields: vec![
+                FieldValue::Str("user".into()),
+                FieldValue::Int(1),
                 FieldValue::Str("Is there a perf issue in JWT validation?".into()),
-                FieldValue::Int(10), FieldValue::Bool(false)],
+                FieldValue::Int(10),
+                FieldValue::Bool(false),
+            ],
             meta: MetaFields::default(),
         },
         AgentRecord {
-            record_type: RecordType::Tool, id: "t1".into(), thread_id: "review_001".into(), step: 2,
-            fields: vec![FieldValue::Str("code_search".into()),
+            record_type: RecordType::Tool,
+            id: "t1".into(),
+            thread_id: "review_001".into(),
+            step: 2,
+            fields: vec![
+                FieldValue::Str("code_search".into()),
                 FieldValue::Str("{\"query\":\"JWT validation\"}".into()),
-                FieldValue::Str("done".into())],
+                FieldValue::Str("done".into()),
+            ],
             meta: MetaFields::default(),
         },
         AgentRecord {
-            record_type: RecordType::Res, id: "t1".into(), thread_id: "review_001".into(), step: 3,
-            fields: vec![FieldValue::Str("code_search".into()),
+            record_type: RecordType::Res,
+            id: "t1".into(),
+            thread_id: "review_001".into(),
+            step: 3,
+            fields: vec![
+                FieldValue::Str("code_search".into()),
                 FieldValue::Str(search_output[..search_output.len().min(200)].to_string()),
-                FieldValue::Str("done".into()), FieldValue::Int(total_latency as i64)],
+                FieldValue::Str("done".into()),
+                FieldValue::Int(total_latency as i64),
+            ],
             meta: MetaFields::default(),
         },
         AgentRecord {
-            record_type: RecordType::Msg, id: "m2".into(), thread_id: "review_001".into(), step: 4,
-            fields: vec![FieldValue::Str("assistant".into()), FieldValue::Int(2),
+            record_type: RecordType::Msg,
+            id: "m2".into(),
+            thread_id: "review_001".into(),
+            step: 4,
+            fields: vec![
+                FieldValue::Str("assistant".into()),
+                FieldValue::Int(2),
                 FieldValue::Str(analysis_output[..analysis_output.len().min(500)].to_string()),
-                FieldValue::Int(result.tokens_used as i64), FieldValue::Bool(false)],
+                FieldValue::Int(result.tokens_used as i64),
+                FieldValue::Bool(false),
+            ],
             meta: MetaFields::default(),
         },
     ];
@@ -223,7 +312,10 @@ fn main() {
     };
 
     let encoded = payload.encode();
-    check!("encode conversation", encoded.starts_with("ULMEN-AGENT v1\n"));
+    check!(
+        "encode conversation",
+        encoded.starts_with("ULMEN-AGENT v1\n")
+    );
     check!("validate conversation", validate_payload(&payload).is_ok());
 
     // Store in uldb
@@ -247,11 +339,15 @@ fn main() {
             {"role": "tool", "name": "code_search", "result": "..."},
             {"role": "assistant", "content": "..."}
         ]
-    })).unwrap();
+    }))
+    .unwrap();
 
     println!("  ULMEN payload: {} bytes", encoded.len());
     println!("  JSON equiv:    ~{} bytes", json_equiv.len());
-    println!("  Savings:       {}%", ((1.0 - encoded.len() as f64 / (json_equiv.len() as f64 * 2.0)) * 100.0) as i32);
+    println!(
+        "  Savings:       {}%",
+        ((1.0 - encoded.len() as f64 / (json_equiv.len() as f64 * 2.0)) * 100.0) as i32
+    );
 
     // === 6. Benchmarks ===
     println!("\n--- 6. LLM Benchmarks ---");
@@ -262,21 +358,38 @@ fn main() {
 
     for i in 0..3 {
         let start = Instant::now();
-        let resp = llm.ask(&format!("What is {}+{}? Just the number.", i+1, i+2)).unwrap();
+        let resp = llm
+            .ask(&format!("What is {}+{}? Just the number.", i + 1, i + 2))
+            .unwrap();
         let ms = start.elapsed().as_millis() as u64;
         latencies.push(ms);
         total_tokens += resp.input_tokens + resp.output_tokens;
-        println!("    Call {}: {} ms, {} tokens, response: {:?}",
-            i+1, ms, resp.input_tokens + resp.output_tokens, resp.content.trim());
+        println!(
+            "    Call {}: {} ms, {} tokens, response: {:?}",
+            i + 1,
+            ms,
+            resp.input_tokens + resp.output_tokens,
+            resp.content.trim()
+        );
     }
 
     let avg_latency = latencies.iter().sum::<u64>() / latencies.len() as u64;
     let min_latency = *latencies.iter().min().unwrap();
     let max_latency = *latencies.iter().max().unwrap();
 
-    println!("\n  Latency: avg={} ms, min={} ms, max={} ms", avg_latency, min_latency, max_latency);
-    println!("  Total tokens across {} calls: {}", latencies.len(), total_tokens);
-    println!("  Tokens/sec: {:.0}", total_tokens as f64 / (latencies.iter().sum::<u64>() as f64 / 1000.0));
+    println!(
+        "\n  Latency: avg={} ms, min={} ms, max={} ms",
+        avg_latency, min_latency, max_latency
+    );
+    println!(
+        "  Total tokens across {} calls: {}",
+        latencies.len(),
+        total_tokens
+    );
+    println!(
+        "  Tokens/sec: {:.0}",
+        total_tokens as f64 / (latencies.iter().sum::<u64>() as f64 / 1000.0)
+    );
 
     // === Results ===
     println!("\n  Passed: {}  Failed: {}", pass, fail);
