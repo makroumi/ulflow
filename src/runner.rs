@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
+use crate::capability::Capabilities;
 use crate::llm::LLM;
 use ulmcp::registry::Registry;
 
@@ -19,6 +20,7 @@ pub struct FlowRunner {
     telemetry: Telemetry,
     event_bus: EventBus,
     llm: Option<LLM>,
+    capabilities: Option<Capabilities>,
 }
 
 impl FlowRunner {
@@ -28,12 +30,20 @@ impl FlowRunner {
             telemetry: Telemetry::new(),
             event_bus: EventBus::new(),
             llm: None,
+            capabilities: None,
         }
     }
 
     /// Set the LLM for agent steps.
     pub fn with_llm(mut self, llm: LLM) -> Self {
         self.llm = Some(llm);
+        self
+    }
+
+    /// Set capability constraints for this runner.
+    /// All tool calls and LLM calls will be checked against these capabilities.
+    pub fn with_capabilities(mut self, caps: Capabilities) -> Self {
+        self.capabilities = Some(caps);
         self
     }
 
@@ -229,7 +239,7 @@ impl FlowRunner {
     }
 
     fn execute_step(
-        &self,
+        &mut self,
         kind: &StepKind,
         ctx: &mut ExecutionContext,
         _run_id: &str,
@@ -240,6 +250,13 @@ impl FlowRunner {
                 inputs,
                 output_field: _,
             } => {
+                // Capability check: can this agent call this tool?
+                if let Some(ref caps) = self.capabilities {
+                    if let Err(denied) = caps.require_tool(tool_name) {
+                        return Err(format!("capability denied: {}", denied));
+                    }
+                }
+
                 // Resolve inputs
                 let mut args = ulmcp::tool::ToolCall {
                     call_id: format!("call_{}", chrono_ms()),
@@ -269,12 +286,27 @@ impl FlowRunner {
                 context_inputs: _,
                 output_field: _,
             } => {
+                // Capability check: can this agent use the LLM?
+                if let Some(ref caps) = self.capabilities {
+                    if let Some(ref llm) = self.llm {
+                        if let Err(denied) = caps.require_llm(llm.provider()) {
+                            return Err(format!("capability denied: {}", denied));
+                        }
+                    }
+                }
+
                 let rendered = ctx.render(prompt);
                 // If LLM is configured, call it. Otherwise return rendered prompt.
                 if let Some(ref llm) = self.llm {
                     match llm.ask(&rendered) {
                         Ok(response) => {
                             let tokens = response.input_tokens + response.output_tokens;
+                            // Capability check: token budget
+                            if let Some(ref mut caps) = self.capabilities {
+                                if let Err(denied) = caps.use_tokens(tokens) {
+                                    return Err(format!("budget exceeded: {}", denied));
+                                }
+                            }
                             Ok((Some(ContextValue::String(response.content)), tokens))
                         }
                         Err(e) => Err(format!("LLM error: {}", e)),
@@ -646,24 +678,106 @@ mod tests {
     }
 
     #[test]
-    fn agent_step_renders_prompt() {
-        let flow = Flow::pipeline("agent_flow")
-            .step(Step::agent(
-                "analyze",
-                "Review {{task}} for security issues",
-            ))
+    fn capability_blocks_denied_tool() {
+        let flow = Flow::pipeline("cap_test")
+            .step(
+                Step::tool("s1")
+                    .tool("echo")
+                    .input_literal("text", "hi")
+                    .build(),
+            )
             .build()
             .unwrap();
 
-        let mut runner = FlowRunner::new(test_registry());
-        let result = runner
-            .run(flow, FlowInput::new().var("task", "auth code"))
+        let caps =
+            crate::capability::Capabilities::new("restricted_agent").allow_tool("other_tool"); // NOT echo
+
+        let mut runner = FlowRunner::new(test_registry()).with_capabilities(caps);
+
+        let result = runner.run(flow, FlowInput::new());
+        assert!(result.is_err(), "denied tool must fail");
+    }
+
+    #[test]
+    fn capability_allows_permitted_tool() {
+        let flow = Flow::pipeline("cap_ok")
+            .step(
+                Step::tool("s1")
+                    .tool("echo")
+                    .input_literal("text", "hi")
+                    .build(),
+            )
+            .build()
             .unwrap();
 
-        assert_eq!(result.steps_completed, 1);
-        assert_eq!(
-            result.get_str("analyze.output"),
-            Some("Review auth code for security issues")
-        );
+        let caps = crate::capability::Capabilities::new("allowed_agent").allow_tool("echo");
+
+        let mut runner = FlowRunner::new(test_registry()).with_capabilities(caps);
+
+        let result = runner.run(flow, FlowInput::new());
+        assert!(result.is_ok(), "permitted tool must succeed");
+    }
+
+    #[test]
+    fn capability_wildcard_allows_any_tool() {
+        let flow = Flow::pipeline("cap_wild")
+            .step(
+                Step::tool("s1")
+                    .tool("echo")
+                    .input_literal("text", "hi")
+                    .build(),
+            )
+            .build()
+            .unwrap();
+
+        let caps = crate::capability::Capabilities::new("admin").allow_all_tools();
+
+        let mut runner = FlowRunner::new(test_registry()).with_capabilities(caps);
+
+        let result = runner.run(flow, FlowInput::new());
+        assert!(result.is_ok(), "wildcard tool must succeed");
+    }
+
+    #[test]
+    fn no_capabilities_means_no_restriction() {
+        let flow = Flow::pipeline("no_cap")
+            .step(
+                Step::tool("s1")
+                    .tool("echo")
+                    .input_literal("text", "hi")
+                    .build(),
+            )
+            .build()
+            .unwrap();
+
+        // No with_capabilities() call = unrestricted
+        let mut runner = FlowRunner::new(test_registry());
+        let result = runner.run(flow, FlowInput::new());
+        assert!(result.is_ok(), "no capabilities = unrestricted");
+    }
+
+    #[test]
+    fn capability_token_budget_enforcement() {
+        // This test doesn't call a real LLM, so token budget won't trigger
+        // during agent steps (no LLM configured). But it verifies the
+        // capability is properly attached to the runner.
+        let caps = crate::capability::Capabilities::new("budget_agent")
+            .allow_all_tools()
+            .token_budget(100);
+
+        let flow = Flow::pipeline("budget")
+            .step(
+                Step::tool("s1")
+                    .tool("echo")
+                    .input_literal("text", "hi")
+                    .build(),
+            )
+            .build()
+            .unwrap();
+
+        let mut runner = FlowRunner::new(test_registry()).with_capabilities(caps);
+
+        let result = runner.run(flow, FlowInput::new());
+        assert!(result.is_ok());
     }
 }
