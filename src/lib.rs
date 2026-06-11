@@ -24,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 pub mod agent;
+pub mod capability;
 pub mod checkpoint;
 pub mod context;
 pub mod error;
@@ -39,6 +40,7 @@ pub mod workflow;
 /// Re-export everything needed to build and run workflows.
 pub mod prelude {
     pub use crate::agent::{AgentCall, AgentResult};
+    pub use crate::capability::{AccessDenied, Cap, Capabilities};
     pub use crate::context::{ContextBudget, ExecutionContext};
     pub use crate::error::{FlowError, StepError};
     pub use crate::event::{EventKind, FlowEvent};
