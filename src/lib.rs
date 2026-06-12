@@ -32,6 +32,7 @@ pub mod event;
 pub mod json_flow;
 pub mod llm;
 pub mod memory;
+pub mod replay;
 pub mod runner;
 pub mod scheduler;
 pub mod step;
@@ -48,6 +49,7 @@ pub mod prelude {
     pub use crate::json_flow::flow_from_json;
     pub use crate::llm::{ChatRequest, ChatResponse, Message, Role, LLM};
     pub use crate::memory::{Memory, MemoryScope};
+    pub use crate::replay::{diff_runs, RunRecorder, RunRecording, RunReplayer};
     pub use crate::runner::FlowRunner;
     pub use crate::scheduler::{
         ConcurrencyLimit, CostTracker, ModelRouter, Priority, SchedulerConfig,
