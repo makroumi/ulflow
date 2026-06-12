@@ -315,6 +315,46 @@ impl Capabilities {
         }
     }
 
+    /// Check and enforce db:read capability.
+    pub fn require_db_read(&self) -> Result<(), AccessDenied> {
+        self.require(&Cap::DbRead)
+    }
+
+    /// Check and enforce db:write capability.
+    pub fn require_db_write(&self) -> Result<(), AccessDenied> {
+        self.require(&Cap::DbWrite)
+    }
+
+    /// Check and enforce db:search capability.
+    pub fn require_db_search(&self) -> Result<(), AccessDenied> {
+        self.require(&Cap::DbSearch)
+    }
+
+    /// Check and enforce session:create capability.
+    pub fn require_session_create(&self) -> Result<(), AccessDenied> {
+        self.require(&Cap::SessionCreate)
+    }
+
+    /// Check and enforce session:read capability.
+    pub fn require_session_read(&self) -> Result<(), AccessDenied> {
+        self.require(&Cap::SessionRead)
+    }
+
+    /// Check and enforce workflow:execute capability.
+    pub fn require_workflow_execute(&self) -> Result<(), AccessDenied> {
+        self.require(&Cap::WorkflowExecute)
+    }
+
+    /// Check and enforce workflow:register capability.
+    pub fn require_workflow_register(&self) -> Result<(), AccessDenied> {
+        self.require(&Cap::WorkflowRegister)
+    }
+
+    /// Check and enforce namespace access.
+    pub fn require_namespace(&self, ns: &str) -> Result<(), AccessDenied> {
+        self.require(&Cap::Namespace(ns.into()))
+    }
+
     /// Check and enforce tool call capability.
     pub fn require_tool(&self, tool_name: &str) -> Result<(), AccessDenied> {
         self.require(&Cap::Tool(tool_name.into()))
@@ -584,5 +624,47 @@ mod tests {
         assert!(Cap::parse("invalid").is_none());
         assert!(Cap::parse("unknown:value").is_none());
         assert!(Cap::parse("db:invalid").is_none());
+
+        #[test]
+        fn require_db_read_denied() {
+            let caps = Capabilities::new("agent");
+            assert!(caps.require_db_read().is_err());
+        }
+
+        #[test]
+        fn require_db_read_allowed() {
+            let caps = Capabilities::new("agent").allow_db_read();
+            assert!(caps.require_db_read().is_ok());
+        }
+
+        #[test]
+        fn require_db_write_denied() {
+            let caps = Capabilities::new("agent").allow_db_read();
+            assert!(caps.require_db_write().is_err());
+        }
+
+        #[test]
+        fn require_session_create() {
+            let caps = Capabilities::new("agent").allow_sessions();
+            assert!(caps.require_session_create().is_ok());
+            assert!(caps.require_session_read().is_ok());
+        }
+
+        #[test]
+        fn require_workflow_execute() {
+            let caps = Capabilities::new("agent").allow_workflows();
+            assert!(caps.require_workflow_execute().is_ok());
+            assert!(caps.require_workflow_register().is_err()); // allow_workflows only adds execute
+        }
+
+        #[test]
+        fn require_namespace_isolation() {
+            let caps = Capabilities::new("agent")
+                .namespace("repo-a")
+                .namespace("repo-b");
+            assert!(caps.require_namespace("repo-a").is_ok());
+            assert!(caps.require_namespace("repo-b").is_ok());
+            assert!(caps.require_namespace("repo-c").is_err());
+        }
     }
 }
